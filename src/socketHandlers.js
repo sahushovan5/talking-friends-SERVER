@@ -18,7 +18,14 @@ import {
   updateParticipantMedia
 } from './rooms.js';
 
-const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const STUN_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+];
 
 /**
  * Register all Socket.io events
@@ -549,7 +556,7 @@ export function registerSocketHandlers(io, socket) {
 
     if (leaveResult) {
       console.log(`[Disconnect Cleanup] ${socket.id} removed from ${currentRoomId}`);
-      socket.to(currentRoomId).emit('user-left', { socketId: socket.id });
+      io.to(currentRoomId).emit('user-left', { socketId: socket.id });
 
       if (leaveResult.newOwnerId) {
         io.to(currentRoomId).emit('owner-updated', { newOwnerId: leaveResult.newOwnerId });
