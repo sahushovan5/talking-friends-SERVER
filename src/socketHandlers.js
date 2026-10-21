@@ -11,7 +11,9 @@ import {
   kickUser,
   updateRoomSettings,
   muteUser,
-  canSendMessage
+  canSendMessage,
+  getAllActiveRoomsSummary,
+  registerBrowserSession
 } from './rooms.js';
 
 const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -24,15 +26,76 @@ const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 export function registerSocketHandlers(io, socket) {
   console.log(`[Socket Connected] ID: ${socket.id}`);
 
+  const broadcastActiveRooms = () => {
+    io.emit('active-rooms-updated', getAllActiveRoomsSummary());
+  };
+
+  /**
+   * Enforce 1 active room per browser session
+   * Kicks / cleans up any previous room connection in the same browser (or another tab)
+   */
+  const handleSingleBrowserSession = (browserId, currentSocket, newRoomId) => {
+    // 1. If this same socket was already in another room, clean it up
+    const existing = findRoomBySocketId(currentSocket.id);
+    if (existing && existing.roomId !== newRoomId) {
+      currentSocket.leave(existing.roomId);
+      const leaveRes = leaveRoom(existing.roomId, currentSocket.id);
+      if (leaveRes) {
+        io.to(existing.roomId).emit('user-left', { socketId: currentSocket.id });
+        if (leaveRes.newOwnerId) {
+          io.to(existing.roomId).emit('owner-updated', { newOwnerId: leaveRes.newOwnerId });
+        }
+      }
+    }
+
+    // 2. If another tab with the same browserId was in a room, disconnect it
+    if (browserId) {
+      const prevSession = registerBrowserSession(browserId, currentSocket.id, newRoomId);
+      if (prevSession && prevSession.socketId !== currentSocket.id) {
+        console.log(`[Browser Session Replaced] Browser ID: ${browserId} moved to new room. Kicking socket: ${prevSession.socketId}`);
+        const prevSocket = io.sockets.sockets.get(prevSession.socketId);
+        if (prevSocket) {
+          prevSocket.leave(prevSession.roomId);
+          prevSocket.emit('kicked', {
+            reason: 'You joined another room from another tab in this browser. Only one active room per browser is allowed.'
+          });
+        }
+        const leaveRes = leaveRoom(prevSession.roomId, prevSession.socketId);
+        if (leaveRes) {
+          io.to(prevSession.roomId).emit('user-left', { socketId: prevSession.socketId });
+          if (leaveRes.newOwnerId) {
+            io.to(prevSession.roomId).emit('owner-updated', { newOwnerId: leaveRes.newOwnerId });
+          }
+        }
+      }
+    }
+  };
+
+  // Send current active rooms immediately on connection
+  socket.emit('active-rooms-updated', getAllActiveRoomsSummary());
+
+  // get-active-rooms
+  socket.on('get-active-rooms', (callback) => {
+    const list = getAllActiveRoomsSummary();
+    if (typeof callback === 'function') {
+      callback({ success: true, rooms: list });
+    }
+    socket.emit('active-rooms-updated', list);
+  });
+
   // --------------------------------------------------------------------------
   // 1. Room Lifecycle
   // --------------------------------------------------------------------------
 
-  // create-room: { username, maxParticipants }
-  socket.on('create-room', ({ username, maxParticipants }, callback) => {
+  // create-room: { username, maxParticipants, browserId }
+  socket.on('create-room', ({ username, maxParticipants, browserId }, callback) => {
     try {
-      const { room, participant } = createRoom(socket.id, username, maxParticipants);
+      const clientBrowserId = browserId || socket.handshake.auth?.browserId;
+      handleSingleBrowserSession(clientBrowserId, socket, null);
+
+      const { room, participant } = createRoom(socket.id, username, maxParticipants, clientBrowserId);
       socket.join(room.id);
+      registerBrowserSession(clientBrowserId, socket.id, room.id);
 
       console.log(`[Room Created] Room ID: ${room.id} by ${username} (${socket.id})`);
 
@@ -55,6 +118,7 @@ export function registerSocketHandlers(io, socket) {
       }
 
       socket.emit('room-created', responsePayload);
+      broadcastActiveRooms();
     } catch (err) {
       console.error('[create-room error]', err);
       if (typeof callback === 'function') {
@@ -63,11 +127,14 @@ export function registerSocketHandlers(io, socket) {
     }
   });
 
-  // join-room: { roomId, username }
-  socket.on('join-room', ({ roomId, username }, callback) => {
+  // join-room: { roomId, username, browserId }
+  socket.on('join-room', ({ roomId, username, browserId }, callback) => {
     try {
       const cleanRoomId = (roomId || '').trim().toLowerCase();
-      const result = joinRoom(cleanRoomId, socket.id, username);
+      const clientBrowserId = browserId || socket.handshake.auth?.browserId;
+      handleSingleBrowserSession(clientBrowserId, socket, cleanRoomId);
+
+      const result = joinRoom(cleanRoomId, socket.id, username, clientBrowserId);
 
       if (result.error) {
         if (typeof callback === 'function') {
@@ -78,6 +145,7 @@ export function registerSocketHandlers(io, socket) {
       }
 
       const { room, participant } = result;
+      registerBrowserSession(clientBrowserId, socket.id, cleanRoomId);
       socket.join(cleanRoomId);
 
       console.log(`[User Joined] ${participant.username} (${socket.id}) -> Room: ${cleanRoomId}`);
@@ -111,6 +179,8 @@ export function registerSocketHandlers(io, socket) {
         isMuted: participant.isMuted,
         isChatMuted: participant.isChatMuted
       });
+
+      broadcastActiveRooms();
     } catch (err) {
       console.error('[join-room error]', err);
       if (typeof callback === 'function') {
@@ -140,6 +210,8 @@ export function registerSocketHandlers(io, socket) {
           console.log(`[Owner Updated] New owner for ${currentRoomId}: ${leaveResult.newOwnerId}`);
           io.to(currentRoomId).emit('owner-updated', { newOwnerId: leaveResult.newOwnerId });
         }
+
+        broadcastActiveRooms();
       }
 
       if (typeof callback === 'function') {
@@ -214,6 +286,7 @@ export function registerSocketHandlers(io, socket) {
 
       // Broadcast user-left to remaining peers
       io.to(activeRoom.id).emit('user-left', { socketId: targetId });
+      broadcastActiveRooms();
 
       if (typeof callback === 'function') {
         callback({ success: true });
@@ -245,6 +318,7 @@ export function registerSocketHandlers(io, socket) {
 
       // Broadcast room settings update to all participants in the room
       io.to(activeRoom.id).emit('room-settings-updated', res.roomSettings);
+      broadcastActiveRooms();
 
       if (typeof callback === 'function') {
         callback({ success: true, settings: res.roomSettings });
@@ -367,6 +441,8 @@ export function registerSocketHandlers(io, socket) {
       if (leaveResult.newOwnerId) {
         io.to(currentRoomId).emit('owner-updated', { newOwnerId: leaveResult.newOwnerId });
       }
+
+      broadcastActiveRooms();
     }
   }
 }

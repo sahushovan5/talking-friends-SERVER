@@ -30,6 +30,30 @@ export function serializeRoom(room) {
 }
 
 /**
+ * Helper to get active rooms summary for lobby listing
+ */
+export function getAllActiveRoomsSummary() {
+  const list = [];
+  for (const room of rooms.values()) {
+    list.push({
+      id: room.id,
+      ownerSocketId: room.ownerSocketId,
+      participantCount: room.participants.size,
+      maxParticipants: room.maxParticipants,
+      allowChat: room.allowChat,
+      allowSpeaking: room.allowSpeaking,
+      isFull: room.participants.size >= room.maxParticipants,
+      participants: Array.from(room.participants.values()).map((p) => ({
+        socketId: p.socketId,
+        username: p.username,
+        isOwner: p.isOwner
+      }))
+    });
+  }
+  return list;
+}
+
+/**
  * Generate a friendly alphanumeric room ID (e.g. "echo-7f2a")
  */
 export function generateRoomId() {
@@ -37,18 +61,46 @@ export function generateRoomId() {
   return `echo-${code}`;
 }
 
+// Map<browserId, { socketId, roomId }> to enforce 1 room per browser
+export const browserSessions = new Map();
+
+/**
+ * Register or replace an active browser session.
+ * If this browser was already in a room, returns previous session info.
+ */
+export function registerBrowserSession(browserId, socketId, roomId) {
+  if (!browserId) return null;
+  const previous = browserSessions.get(browserId) || null;
+  browserSessions.set(browserId, { socketId, roomId });
+  return previous;
+}
+
+/**
+ * Cleanup browser session when a socket leaves or disconnects
+ */
+export function unregisterBrowserSession(socketId) {
+  for (const [browserId, session] of browserSessions.entries()) {
+    if (session.socketId === socketId) {
+      browserSessions.delete(browserId);
+      break;
+    }
+  }
+}
+
 /**
  * Create a new ephemeral voice room
  */
-export function createRoom(ownerSocketId, username, maxParticipants = 10) {
-  const parsedMax = Math.min(Math.max(parseInt(maxParticipants, 10) || 10, 2), 10);
+export function createRoom(ownerSocketId, username, maxParticipants = 10, browserId = null) {
+  const parsedMax = Math.min(Math.max(parseInt(maxParticipants, 10) || 10, 1), 10);
   const roomId = generateRoomId();
 
   const hostParticipant = {
     socketId: ownerSocketId,
+    browserId: browserId || ownerSocketId,
     username: username || 'Host',
     isOwner: true,
-    isMuted: false,
+    isMuted: true, // Default mic to off upon joining
+    isMutedByHost: false,
     isChatMuted: false
   };
 
@@ -82,7 +134,7 @@ export function getRoom(roomId) {
 /**
  * Join an existing room
  */
-export function joinRoom(roomId, socketId, username) {
+export function joinRoom(roomId, socketId, username, browserId = null) {
   const room = rooms.get(roomId);
   if (!room) {
     return { error: 'Room not found' };
@@ -94,9 +146,11 @@ export function joinRoom(roomId, socketId, username) {
 
   const newParticipant = {
     socketId,
+    browserId: browserId || socketId,
     username: username || `User_${socketId.slice(0, 4)}`,
     isOwner: room.ownerSocketId === socketId,
-    isMuted: !room.allowSpeaking,
+    isMuted: true, // Default mic to off upon joining
+    isMutedByHost: false,
     isChatMuted: !room.allowChat
   };
 
@@ -117,6 +171,7 @@ export function leaveRoom(roomId, socketId) {
 
   const user = room.participants.get(socketId);
   room.participants.delete(socketId);
+  unregisterBrowserSession(socketId);
 
   let newOwnerId = null;
   let roomDeleted = false;
@@ -201,7 +256,7 @@ export function updateRoomSettings(roomId, requesterSocketId, settings) {
   }
 
   if (typeof settings.maxParticipants === 'number') {
-    room.maxParticipants = Math.min(Math.max(settings.maxParticipants, 2), 10);
+    room.maxParticipants = Math.min(Math.max(settings.maxParticipants, 1), 10);
   }
   if (typeof settings.allowChat === 'boolean') {
     room.allowChat = settings.allowChat;
@@ -240,6 +295,7 @@ export function muteUser(roomId, requesterSocketId, targetSocketId, muteSpeaking
 
   if (typeof muteSpeaking === 'boolean') {
     target.isMuted = muteSpeaking;
+    target.isMutedByHost = muteSpeaking;
   }
   if (typeof muteChat === 'boolean') {
     target.isChatMuted = muteChat;

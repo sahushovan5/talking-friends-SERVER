@@ -4,7 +4,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { registerSocketHandlers } from './socketHandlers.js';
-import { rooms, serializeRoom } from './rooms.js';
+import { rooms, serializeRoom, getAllActiveRoomsSummary } from './rooms.js';
 
 dotenv.config();
 
@@ -63,6 +63,16 @@ app.get('/api/stats', (req, res) => {
   res.status(200).json({
     totalActiveRooms: rooms.size,
     totalActiveParticipants: totalParticipants
+  });
+});
+
+// List all active rooms with participant counts and metadata
+app.get('/api/rooms', (req, res) => {
+  const activeRooms = getAllActiveRoomsSummary();
+  res.status(200).json({
+    success: true,
+    count: activeRooms.length,
+    rooms: activeRooms
   });
 });
 
