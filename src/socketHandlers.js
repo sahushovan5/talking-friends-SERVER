@@ -404,8 +404,8 @@ export function registerSocketHandlers(io, socket) {
     }
   });
 
-  // youtube-player-action: { roomId, action, currentTime } ('play' | 'pause' | 'seek')
-  socket.on('youtube-player-action', ({ roomId, action, currentTime }) => {
+  // youtube-player-action: { roomId, action, currentTime, videoId, title } ('play' | 'pause' | 'seek' | 'change-video')
+  socket.on('youtube-player-action', ({ roomId, action, currentTime, videoId, title }) => {
     try {
       const activeRoom = roomId ? getRoom(roomId) : findRoomBySocketId(socket.id)?.room;
       if (!activeRoom) return;
@@ -416,10 +416,14 @@ export function registerSocketHandlers(io, socket) {
         participant.mediaState.updatedAt = Date.now();
         if (action === 'play') participant.mediaState.isPlaying = true;
         if (action === 'pause') participant.mediaState.isPlaying = false;
+        if (videoId) participant.mediaState.videoId = videoId;
+        if (title) participant.mediaState.title = title;
       }
 
       socket.to(activeRoom.id).emit('peer-youtube-action', {
         broadcasterId: socket.id,
+        videoId: videoId || participant?.mediaState?.videoId,
+        title: title || participant?.mediaState?.title,
         action,
         currentTime: Number(currentTime) || 0,
         timestamp: Date.now()
