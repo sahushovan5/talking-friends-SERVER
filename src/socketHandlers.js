@@ -13,7 +13,8 @@ import {
   muteUser,
   canSendMessage,
   getAllActiveRoomsSummary,
-  registerBrowserSession
+  registerBrowserSession,
+  updateParticipantMedia
 } from './rooms.js';
 
 const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -370,6 +371,76 @@ export function registerSocketHandlers(io, socket) {
         socketId: socket.id,
         isMuted: participant.isMuted
       });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // YouTube Watch Together & Synchronized Playback Relay
+  // --------------------------------------------------------------------------
+
+  // broadcast-youtube-state: { roomId, videoId, title, currentTime, isPlaying }
+  socket.on('broadcast-youtube-state', ({ roomId, videoId, title, currentTime, isPlaying }) => {
+    try {
+      const activeRoom = roomId ? getRoom(roomId) : findRoomBySocketId(socket.id)?.room;
+      if (!activeRoom) return;
+
+      const mediaState = updateParticipantMedia(activeRoom.id, socket.id, {
+        broadcasterId: socket.id,
+        videoId,
+        title: title || 'YouTube Video',
+        currentTime: Number(currentTime) || 0,
+        isPlaying: Boolean(isPlaying)
+      });
+
+      if (mediaState) {
+        socket.to(activeRoom.id).emit('peer-youtube-updated', {
+          socketId: socket.id,
+          mediaState
+        });
+      }
+    } catch (err) {
+      console.error('[broadcast-youtube-state error]', err);
+    }
+  });
+
+  // youtube-player-action: { roomId, action, currentTime } ('play' | 'pause' | 'seek')
+  socket.on('youtube-player-action', ({ roomId, action, currentTime }) => {
+    try {
+      const activeRoom = roomId ? getRoom(roomId) : findRoomBySocketId(socket.id)?.room;
+      if (!activeRoom) return;
+
+      const participant = activeRoom.participants.get(socket.id);
+      if (participant && participant.mediaState) {
+        participant.mediaState.currentTime = Number(currentTime) || 0;
+        participant.mediaState.updatedAt = Date.now();
+        if (action === 'play') participant.mediaState.isPlaying = true;
+        if (action === 'pause') participant.mediaState.isPlaying = false;
+      }
+
+      socket.to(activeRoom.id).emit('peer-youtube-action', {
+        broadcasterId: socket.id,
+        action,
+        currentTime: Number(currentTime) || 0,
+        timestamp: Date.now()
+      });
+    } catch (err) {
+      console.error('[youtube-player-action error]', err);
+    }
+  });
+
+  // stop-youtube: { roomId }
+  socket.on('stop-youtube', ({ roomId }) => {
+    try {
+      const activeRoom = roomId ? getRoom(roomId) : findRoomBySocketId(socket.id)?.room;
+      if (!activeRoom) return;
+
+      updateParticipantMedia(activeRoom.id, socket.id, null);
+
+      io.to(activeRoom.id).emit('peer-youtube-stopped', {
+        socketId: socket.id
+      });
+    } catch (err) {
+      console.error('[stop-youtube error]', err);
     }
   });
 

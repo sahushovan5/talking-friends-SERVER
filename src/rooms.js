@@ -101,7 +101,8 @@ export function createRoom(ownerSocketId, username, maxParticipants = 10, browse
     isOwner: true,
     isMuted: true, // Default mic to off upon joining
     isMutedByHost: false,
-    isChatMuted: false
+    isChatMuted: false,
+    mediaState: null
   };
 
   const participants = new Map();
@@ -151,7 +152,8 @@ export function joinRoom(roomId, socketId, username, browserId = null) {
     isOwner: room.ownerSocketId === socketId,
     isMuted: true, // Default mic to off upon joining
     isMutedByHost: false,
-    isChatMuted: !room.allowChat
+    isChatMuted: !room.allowChat,
+    mediaState: null
   };
 
   room.participants.set(socketId, newParticipant);
@@ -160,6 +162,23 @@ export function joinRoom(roomId, socketId, username, browserId = null) {
     room,
     participant: newParticipant
   };
+}
+
+/**
+ * Update a participant's YouTube media playback state
+ */
+export function updateParticipantMedia(roomId, socketId, mediaState) {
+  const room = rooms.get(roomId);
+  if (!room) return null;
+  const participant = room.participants.get(socketId);
+  if (!participant) return null;
+  participant.mediaState = mediaState
+    ? {
+        ...mediaState,
+        updatedAt: Date.now()
+      }
+    : null;
+  return participant.mediaState;
 }
 
 /**
