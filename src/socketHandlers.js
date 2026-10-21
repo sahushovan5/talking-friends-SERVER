@@ -368,6 +368,7 @@ export function registerSocketHandlers(io, socket) {
     const participant = activeRoom.participants.get(socket.id);
     if (participant) {
       participant.isMuted = Boolean(isMuted);
+      participant.isMutedByHost = false;
       socket.to(activeRoom.id).emit('user-audio-state-changed', {
         socketId: socket.id,
         isMuted: participant.isMuted
