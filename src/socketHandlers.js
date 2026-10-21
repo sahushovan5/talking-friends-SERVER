@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import yts from 'yt-search';
 import {
   rooms,
   serializeRoom,
@@ -441,6 +442,42 @@ export function registerSocketHandlers(io, socket) {
       });
     } catch (err) {
       console.error('[stop-youtube error]', err);
+    }
+  });
+
+  // search-youtube: { query }, callback({ success, videos, error })
+  socket.on('search-youtube', async ({ query }, callback) => {
+    try {
+      if (!query || typeof query !== 'string' || !query.trim()) {
+        if (typeof callback === 'function') {
+          callback({ success: false, error: 'Query string is required', videos: [] });
+        }
+        return;
+      }
+
+      const searchResults = await yts(query.trim());
+      const rawVideos = searchResults?.videos || [];
+
+      const videos = rawVideos.slice(0, 15).map((v) => ({
+        videoId: v.videoId,
+        title: v.title,
+        description: v.description,
+        thumbnail: v.thumbnail || v.image,
+        duration: v.timestamp || '',
+        seconds: v.seconds || 0,
+        views: v.views ? Number(v.views).toLocaleString() : '',
+        author: v.author?.name || 'YouTube Creator',
+        ago: v.ago || ''
+      }));
+
+      if (typeof callback === 'function') {
+        callback({ success: true, videos });
+      }
+    } catch (err) {
+      console.error('[search-youtube error]', err);
+      if (typeof callback === 'function') {
+        callback({ success: false, error: 'Failed to search YouTube videos', videos: [] });
+      }
     }
   });
 

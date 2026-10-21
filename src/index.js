@@ -3,6 +3,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import yts from 'yt-search';
 import { registerSocketHandlers } from './socketHandlers.js';
 import { rooms, serializeRoom, getAllActiveRoomsSummary } from './rooms.js';
 
@@ -92,6 +93,36 @@ app.get('/api/rooms/:roomId', (req, res) => {
       allowSpeaking: room.allowSpeaking
     }
   });
+});
+
+// Search YouTube videos by text query
+app.get('/api/youtube/search', async (req, res) => {
+  try {
+    const query = req.query.q?.trim();
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'Query parameter q is required', videos: [] });
+    }
+
+    const searchResults = await yts(query);
+    const rawVideos = searchResults?.videos || [];
+
+    const videos = rawVideos.slice(0, 15).map((v) => ({
+      videoId: v.videoId,
+      title: v.title,
+      description: v.description,
+      thumbnail: v.thumbnail || v.image,
+      duration: v.timestamp || '',
+      seconds: v.seconds || 0,
+      views: v.views ? Number(v.views).toLocaleString() : '',
+      author: v.author?.name || 'YouTube Creator',
+      ago: v.ago || ''
+    }));
+
+    return res.status(200).json({ success: true, videos });
+  } catch (err) {
+    console.error('YouTube search REST error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to search YouTube videos', videos: [] });
+  }
 });
 
 const server = http.createServer(app);
